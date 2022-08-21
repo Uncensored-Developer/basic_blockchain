@@ -16,6 +16,7 @@ func main() {
 	}
 	wbCmd.AddCommand(versionCmd)
 	wbCmd.AddCommand(balancesCmd())
+	wbCmd.AddCommand(txCmd())
 	err := wbCmd.Execute()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
