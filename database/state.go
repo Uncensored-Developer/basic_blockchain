@@ -2,8 +2,10 @@ package database
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 )
@@ -12,7 +14,10 @@ type State struct {
 	Balances  map[Account]uint
 	txMempool []Tx
 	dbFile    *os.File
+	snapshot  Snapshot
 }
+
+type Snapshot [32]byte
 
 func NewStateFromDisk() (*State, error) {
 	//get current working directory
@@ -39,7 +44,7 @@ func NewStateFromDisk() (*State, error) {
 	}
 
 	scanner := bufio.NewScanner(f)
-	state := &State{balances, make([]Tx, 0), f}
+	state := &State{balances, make([]Tx, 0), f, Snapshot{}}
 
 	//iterate over each txn in tx.db file
 	for scanner.Scan() {
@@ -58,6 +63,12 @@ func NewStateFromDisk() (*State, error) {
 			return nil, err
 		}
 	}
+
+	err = state.doSnapshot()
+	if err != nil {
+		return nil, err
+	}
+
 	return state, nil
 }
 
@@ -85,7 +96,11 @@ func (s *State) Add(tx Tx) error {
 	return nil
 }
 
-func (s *State) Persist() error {
+func (s *State) LatestSnapshot() Snapshot {
+	return s.snapshot
+}
+
+func (s *State) Persist() (Snapshot, error) {
 	//Make a copy of the mempool because s.txMempool will be modified
 	mempool := make([]Tx, len(s.txMempool))
 	copy(mempool, s.txMempool)
@@ -93,16 +108,40 @@ func (s *State) Persist() error {
 	for i := 0; i < len(mempool); i++ {
 		txJson, err := json.Marshal(mempool[i])
 		if err != nil {
-			return err
+			return Snapshot{}, err
 		}
 
+		fmt.Println("Saving new TX to disk:")
+		fmt.Printf("\t%s\n", txJson)
 		if _, err = s.dbFile.Write(append(txJson, '\n')); err != nil {
-			return err
+			return Snapshot{}, err
 		}
+
+		err = s.doSnapshot()
+		if err != nil {
+			return Snapshot{}, err
+		}
+		fmt.Printf("New DB Snapshot: %x\n", s.snapshot)
 
 		//remove persisted TX from the mempool
 		s.txMempool = s.txMempool[1:]
 	}
+	return s.snapshot, nil
+}
+
+func (s *State) doSnapshot() error {
+	//Re-read the whole file from the first byte
+	_, err := s.dbFile.Seek(0, 0)
+	if err != nil {
+		return err
+	}
+
+	txsData, err := ioutil.ReadAll(s.dbFile)
+	if err != nil {
+		return err
+	}
+
+	s.snapshot = sha256.Sum256(txsData)
 	return nil
 }
 
